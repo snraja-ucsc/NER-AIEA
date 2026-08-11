@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+*.csv
+data/
+data.zip
+ollama_models/
