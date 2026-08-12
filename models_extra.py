@@ -27,6 +27,57 @@ import time
 from openai import OpenAI, RateLimitError, APIError, APIConnectionError
 
 
+class FlanT5Model:
+    """Local FLAN-T5 adapter for PromptNER's existing non-chat code path."""
+
+    def __init__(self, model_name="google/flan-t5-xxl", load_in_8bit=True,
+                 max_new_tokens=200, device_map="auto"):
+        try:
+            import torch
+            from transformers import (AutoModelForSeq2SeqLM, AutoTokenizer,
+                                      BitsAndBytesConfig)
+        except ImportError as exc:
+            raise RuntimeError(
+                "FLAN-T5 requires torch, transformers, accelerate, and bitsandbytes."
+            ) from exc
+        self.model = model_name
+        self.max_new_tokens = max_new_tokens
+        self.seconds_per_query = 0.0
+        self.load_in_8bit = load_in_8bit
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        kwargs = {"device_map": device_map}
+        if load_in_8bit:
+            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
+        else:
+            kwargs["torch_dtype"] = torch.float16
+        self._torch = torch
+        self._model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs)
+        self._model.eval()
+
+    def is_chat(self):
+        return False
+
+    def query(self, prompt):
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True)
+        device = next(self._model.parameters()).device
+        inputs = {name: value.to(device) for name, value in inputs.items()}
+        with self._torch.inference_mode():
+            output = self._model.generate(
+                **inputs, max_new_tokens=self.max_new_tokens, do_sample=False,
+            )
+        return self.tokenizer.decode(output[0], skip_special_tokens=True)
+
+    def __call__(self, prompt):
+        if not isinstance(prompt, str):
+            raise TypeError("FLAN-T5 is a non-chat model and expects a string prompt")
+        return self.query(prompt)
+
+
+def get_flan_t5_model(**kwargs):
+    """Construct the paper-control FLAN-T5-XXL model (8-bit by default)."""
+    return FlanT5Model(**kwargs)
+
+
 class ChatModel:
     """
     Generic chat-completion wrapper. Mimics the interface algorithms.py expects
