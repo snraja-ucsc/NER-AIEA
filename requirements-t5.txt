@@ -1,0 +1,13 @@
+# FLAN-T5 replication additions. Install a CUDA-enabled PyTorch build that
+# matches the Pod first; do not let this file replace it with a CPU build.
+transformers>=4.39,<5
+accelerate>=0.27
+bitsandbytes>=0.43
+seqeval>=1.2.2
+
+# PromptNER runtime dependencies used by t5_replication_extra.py
+datasets>=2.16
+nltk>=3.8
+numpy>=1.24
+openai>=1
+pandas>=1.5

@@ -115,11 +115,17 @@ def record_from_line(line, schema):
             return None
         status = next((parse_status(field) for field in fields[1:] if parse_status(field) is not None), None)
         entity_type = next((type_in_text(field, schema) for field in fields[1:] if type_in_text(field, schema)), None)
+        # Tables often put the label in its own column (``Alice | PER | yes``)
+        # rather than wrapping it in parentheses.
+        if entity_type is None:
+            entity_type = next((schema.canonicalize(field) for field in fields[1:]
+                                if schema.canonicalize(field)), None)
         return PredictionRecord(fields[0] if fields else None, True if status is None and entity_type else status,
                                 entity_type, raw)
     match = re.match(r"^(.*?)(?:\s*[,;:\u2014-]\s*)(?:type|label|category)\s*[:=]\s*([\w/-]+)(?:\s*[,;]\s*(.*))?$", line, re.I)
     if match:
-        return PredictionRecord(match.group(1).strip(), parse_status(match.group(3)) or True,
+        status = parse_status(match.group(3))
+        return PredictionRecord(match.group(1).strip(), True if status is None else status,
                                 schema.canonicalize(match.group(2)), raw)
     entity_type = type_in_text(line, schema)
     if entity_type:

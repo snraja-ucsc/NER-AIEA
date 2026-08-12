@@ -44,12 +44,17 @@ class FlanT5Model:
         self.max_new_tokens = max_new_tokens
         self.seconds_per_query = 0.0
         self.load_in_8bit = load_in_8bit
+        if load_in_8bit and not torch.cuda.is_available():
+            raise RuntimeError(
+                "8-bit FLAN-T5 loading requires CUDA. Run on a GPU Pod, or pass "
+                "load_in_8bit=False for a much slower full-precision CPU load."
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         kwargs = {"device_map": device_map}
         if load_in_8bit:
             kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
         else:
-            kwargs["torch_dtype"] = torch.float16
+            kwargs["torch_dtype"] = torch.float16 if torch.cuda.is_available() else torch.float32
         self._torch = torch
         self._model = AutoModelForSeq2SeqLM.from_pretrained(model_name, **kwargs)
         self._model.eval()
@@ -59,7 +64,9 @@ class FlanT5Model:
 
     def query(self, prompt):
         inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True)
-        device = next(self._model.parameters()).device
+        # With ``device_map=\"auto\"`` this is the device hosting the input
+        # embeddings, which is the safe target for the input IDs.
+        device = self._model.get_input_embeddings().weight.device
         inputs = {name: value.to(device) for name, value in inputs.items()}
         with self._torch.inference_mode():
             output = self._model.generate(

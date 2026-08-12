@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import torch
-from seqeval.metrics import f1_score
 
 from algorithms import (Algorithm, ConllConfig, CrossNERAIConfig,
                         CrossNERLiteratureConfig, CrossNERMusicConfig,
@@ -63,10 +62,19 @@ def configure(config, train, model, normalized):
 def evaluate(test, algorithm, limit):
     # Direct calls intentionally avoid run.py's fork-based timeout, which is
     # incompatible with CUDA models initialized in the parent process.
+    try:
+        from seqeval.metrics import f1_score
+    except ImportError as exc:
+        raise RuntimeError(
+            "The replication runner requires seqeval. Install the packages in "
+            "requirements-t5.txt before running a benchmark."
+        ) from exc
     subset = test.sample(min(limit, len(test))).reset_index(drop=True)
     rows, predictions, truths = [], [], []
     for index, row in subset.iterrows():
         algorithm.set_para(row["text"])
+        if hasattr(algorithm, "normalization_records"):
+            algorithm.normalization_records = []
         tokens = row.get("true_tokens", None)
         try:
             pred, raw = algorithm.perform_span(true_tokens=tokens, verbose=False)
@@ -101,19 +109,31 @@ def main():
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output-dir", default="results/t5xxl_replication")
+    parser.add_argument("--datasets", nargs="+", choices=tuple(TARGETS), default=list(TARGETS),
+                        help="Benchmark subsets to run (default: all seven).")
+    parser.add_argument("--modes", nargs="+", choices=("legacy", "normalized"),
+                        default=("legacy", "normalized"),
+                        help="Parser variants to run (default: both).")
+    parser.add_argument("--model-name", default="google/flan-t5-xxl")
+    parser.add_argument("--max-new-tokens", type=int, default=200)
+    parser.add_argument("--no-8bit", action="store_true",
+                        help="Disable bitsandbytes 8-bit loading; needs substantially more memory.")
     parser.add_argument("--smoke", action="store_true", help="one 5-example run; does not test paper scores")
     args = parser.parse_args()
     if args.smoke:
         args.limit, args.runs = 5, 1
+    if args.limit <= 0 or args.runs <= 0:
+        parser.error("--limit and --runs must both be positive")
     os.makedirs(args.output_dir, exist_ok=True)
-    model = get_flan_t5_model()
+    model = get_flan_t5_model(model_name=args.model_name, load_in_8bit=not args.no_8bit,
+                               max_new_tokens=args.max_new_tokens)
     report = {"created_at": datetime.now(timezone.utc).isoformat(), "seed": args.seed,
               "limit": args.limit, "runs": args.runs, "model": model.model,
-              "quantization": "8-bit", "torch": torch.__version__,
+              "quantization": "full precision" if args.no_8bit else "8-bit", "torch": torch.__version__,
               "python": platform.python_version(), "targets": TARGETS, "results": {}}
-    for name in TARGETS:
+    for name in args.datasets:
         modes = {}
-        for normalized in (False, True):
+        for normalized in (mode == "normalized" for mode in args.modes):
             scores, paths, exemplars = [], [], None
             for run in range(args.runs):
                 score, exemplars, path = run_benchmark(name, model, args.seed + run,
